@@ -1,13 +1,21 @@
-name: Collect live snapshot
+name: Collect snapshot and update live map
 
-# Every 15 minutes, fetch one snapshot from the OpenSky API and store it on the `data` branch.
+# Every 15 minutes: fetch every aircraft worldwide from the OpenSky API,
+# store the raw snapshot on the `data` branch, and republish the live map.
+# (Anonymous limit: about 400 credits/day; a worldwide call costs 4 -> every 15 min = 384.
+#  With a free OpenSky account in the repo secrets you can lower this to every 5 minutes.)
 on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["dashboard/**", "ingest/**", "reference/**"]
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: collect
@@ -16,6 +24,9 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,7 +53,12 @@ jobs:
           OPENSKY_CLIENT_SECRET: ${{ secrets.OPENSKY_CLIENT_SECRET }}
         run: python ingest/fetch_states.py
 
-      - name: Commit and push
+      - name: Build live file for the map
+        env:
+          RAW_DIR: databranch/states
+        run: python ingest/publish_live.py
+
+      - name: Store raw snapshot on the data branch
         run: |
           cd databranch
           git add -A
@@ -50,3 +66,10 @@ jobs:
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
               commit -m "snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
           git push origin data
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dashboard
+      - id: deployment
+        uses: actions/deploy-pages@v4

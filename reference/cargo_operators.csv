@@ -1,14 +1,26 @@
 icao_prefix,operator,group
 BCS,European Air Transport Leipzig,DHL
 DHK,DHL Air UK,DHL
-BOX,AeroLogic,DHL / Lufthansa
+DHX,DHL International Aviation ME,DHL
+BOX,AeroLogic,DHL
+AHK,Air Hong Kong,DHL
 UPS,UPS Airlines,UPS
 FDX,FedEx Express,FedEx
 TAY,ASL Airlines Belgium,ASL
 ABR,ASL Airlines Ireland,ASL
-CLX,Cargolux,Cargolux
-GEC,Lufthansa Cargo,Lufthansa
-MPH,Martinair Cargo,Air France-KLM
-SWN,West Atlantic,West Atlantic
-ICL,CAL Cargo Air Lines,CAL
-CKS,Kalitta Air,Kalitta
+CLX,Cargolux,Other cargo
+GEC,Lufthansa Cargo,Other cargo
+MPH,Martinair Cargo,Other cargo
+SWN,West Atlantic,Other cargo
+ICL,CAL Cargo Air Lines,Other cargo
+CKS,Kalitta Air,Other cargo
+GTI,Atlas Air,Other cargo
+PAC,Polar Air Cargo,Other cargo
+NCA,Nippon Cargo Airlines,Other cargo
+CSS,SF Airlines,Other cargo
+CKK,China Cargo Airlines,Other cargo
+CAO,Air China Cargo,Other cargo
+ABX,ABX Air,Other cargo
+ATN,Air Transport International,Other cargo
+AJT,Amerijet International,Other cargo
+WGN,Western Global Airlines,Other cargo

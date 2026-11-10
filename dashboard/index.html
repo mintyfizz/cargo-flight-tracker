@@ -1,12 +1,201 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Europe's night belongs to cargo</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live cargo flights worldwide</title>
+<meta name="description" content="Live map of express cargo flights around the world, built on OpenSky Network data.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --panel: rgba(20, 20, 19, 0.88);
+    --border: #2e2e2c;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --muted: #8f8e88;
+    --dhl: #c98500;
+    --ups: #d95926;
+    --fedex: #9085e9;
+    --asl: #199e70;
+    --other: #3987e5;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0e0e0e; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; color: var(--text); }
+  #map { position: absolute; inset: 0; }
+  .panel { position: absolute; z-index: 1000; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; backdrop-filter: blur(6px); }
+  #info { top: 14px; left: 14px; padding: 14px 16px; max-width: 340px; }
+  #info h1 { font-size: 1.15rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  #info .sub { color: var(--text-2); font-size: 0.82rem; margin: 0 0 12px; }
+  .stats { display: flex; gap: 18px; margin-bottom: 10px; }
+  .stat .v { font-size: 1.5rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .stat .l { color: var(--muted); font-size: 0.75rem; }
+  #updated { color: var(--muted); font-size: 0.75rem; }
+  #legend { bottom: 24px; left: 14px; padding: 10px 12px; font-size: 0.85rem; }
+  #legend label { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; color: var(--text-2); }
+  #legend .sw { width: 12px; height: 12px; border-radius: 3px; }
+  #legend .n { margin-left: auto; padding-left: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #legend input { margin: 0; accent-color: #8f8e88; }
+  .plane { width: 22px; height: 22px; }
+  .plane svg { width: 100%; height: 100%; filter: drop-shadow(0 0 1.5px rgba(0,0,0,.9)); transition: transform .3s; }
+  .plane.ground { opacity: .55; width: 14px; height: 14px; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #1a1a19; color: var(--text); border: 1px solid var(--border); }
+  .leaflet-popup-content { margin: 10px 14px; font-size: 0.85rem; line-height: 1.5; }
+  .leaflet-popup-content b { font-size: 0.95rem; }
+  .leaflet-popup-content .muted { color: var(--muted); }
+  .leaflet-container a.leaflet-popup-close-button { color: var(--muted); }
+  footer { position: absolute; z-index: 1000; right: 14px; bottom: 24px; font-size: 0.75rem; padding: 8px 10px; color: var(--muted); }
+  footer a { color: var(--text-2); }
+  @media (max-width: 600px) { #info { right: 14px; max-width: none; } footer { display: none; } }
+</style>
 </head>
 <body>
-  <h1>Europe's night belongs to cargo</h1>
-  <p>Dashboard coming soon.</p>
+<div id="map"></div>
+
+<div id="info" class="panel">
+  <h1>Live cargo flights worldwide</h1>
+  <p class="sub">Express and cargo airlines, tracked from real aircraft position data.</p>
+  <div class="stats">
+    <div class="stat"><div class="v" id="n-air">–</div><div class="l">cargo flights airborne</div></div>
+    <div class="stat"><div class="v" id="n-ground">–</div><div class="l">on the ground</div></div>
+  </div>
+  <div id="updated">Loading live data…</div>
+</div>
+
+<div id="legend" class="panel"></div>
+
+<footer class="panel">
+  Data: <a href="https://opensky-network.org" target="_blank" rel="noopener">The OpenSky Network</a> ·
+  <a href="https://github.com/mintyfizz/cargo-flight-tracker" target="_blank" rel="noopener">Code</a> · by Nathan Thomas Gatse
+</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const GROUPS = [
+  { key: "DHL", color: "var(--dhl)" },
+  { key: "UPS", color: "var(--ups)" },
+  { key: "FedEx", color: "var(--fedex)" },
+  { key: "ASL", color: "var(--asl)" },
+  { key: "Other cargo", color: "var(--other)" },
+];
+const colorOf = g => (GROUPS.find(x => x.key === g) || GROUPS[4]).color;
+const visible = new Set(GROUPS.map(g => g.key));
+const REFRESH_MS = 60_000;          // re-read the live file every minute
+const MAX_EXTRAPOLATE_S = 20 * 60;  // never move a plane forward more than 20 minutes
+
+const map = L.map("map", { worldCopyJump: true, zoomControl: false }).setView([35, 10], 3);
+L.control.zoom({ position: "topright" }).addTo(map);
+L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+  attribution: "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors",
+  maxZoom: 16,
+}).addTo(map);
+
+const planeSvg = color => `
+  <svg viewBox="0 0 24 24"><path fill="${color}" stroke="#0e0e0e" stroke-width=".6"
+    d="M12 1.5c.8 0 1.4.9 1.4 2.2v5.6l8.1 4.6v2.2l-8.1-2.4v4.7l2.4 1.8v1.8L12 21l-3.8 1v-1.8l2.4-1.8v-4.7l-8.1 2.4v-2.2l8.1-4.6V3.7c0-1.3.6-2.2 1.4-2.2z"/></svg>`;
+
+const markers = new Map();   // icao24 -> { marker, flight }
+let fetchedAt = null;
+
+// Move a point forward along a heading (great-circle approximation)
+function project(lat, lon, headingDeg, meters) {
+  const R = 6371000, d = meters / R, h = headingDeg * Math.PI / 180;
+  const φ1 = lat * Math.PI / 180, λ1 = lon * Math.PI / 180;
+  const φ2 = Math.asin(Math.sin(φ1) * Math.cos(d) + Math.cos(φ1) * Math.sin(d) * Math.cos(h));
+  const λ2 = λ1 + Math.atan2(Math.sin(h) * Math.sin(d) * Math.cos(φ1), Math.cos(d) - Math.sin(φ1) * Math.sin(φ2));
+  return [φ2 * 180 / Math.PI, ((λ2 * 180 / Math.PI + 540) % 360) - 180];
+}
+
+function currentPosition(f) {
+  if (f.on_ground || f.speed_kmh == null || f.heading == null) return [f.lat, f.lon];
+  const elapsed = Math.min(Date.now() / 1000 - f.last_contact, MAX_EXTRAPOLATE_S);
+  return project(f.lat, f.lon, f.heading, (f.speed_kmh / 3.6) * Math.max(elapsed, 0));
+}
+
+function popupHtml(f) {
+  const alt = f.altitude_m != null ? `${Math.round(f.altitude_m * 3.281).toLocaleString("en-GB")} ft` : "–";
+  const seen = Math.round((Date.now() / 1000 - f.last_contact) / 60);
+  return `<b>${f.callsign}</b><br>${f.operator}<br>
+    ${f.on_ground ? "On the ground" : `${alt} · ${f.speed_kmh ?? "–"} km/h · heading ${f.heading ?? "–"}°`}<br>
+    <span class="muted">Last signal ${seen <= 0 ? "just now" : seen + " min ago"}</span>`;
+}
+
+function iconFor(f) {
+  return L.divIcon({
+    className: "",
+    html: `<div class="plane ${f.on_ground ? "ground" : ""}"><svg style="transform:rotate(${f.heading ?? 0}deg)" viewBox="0 0 24 24">${planeSvg(colorOf(f.group)).match(/<path[\s\S]*\/>/)[0]}</svg></div>`,
+    iconSize: f.on_ground ? [14, 14] : [22, 22],
+    iconAnchor: f.on_ground ? [7, 7] : [11, 11],
+  });
+}
+
+function render(data) {
+  fetchedAt = new Date(data.fetched_at);
+  const seen = new Set();
+  for (const f of data.flights) {
+    seen.add(f.icao24);
+    const existing = markers.get(f.icao24);
+    if (existing) {
+      existing.flight = f;
+      existing.marker.setIcon(iconFor(f));
+      existing.marker.setPopupContent(popupHtml(f));
+    } else {
+      const marker = L.marker(currentPosition(f), { icon: iconFor(f) }).bindPopup(popupHtml(f));
+      markers.set(f.icao24, { marker, flight: f });
+    }
+  }
+  for (const [id, m] of markers) if (!seen.has(id)) { m.marker.remove(); markers.delete(id); }
+  applyFilter();
+  updateStats();
+}
+
+function applyFilter() {
+  for (const { marker, flight } of markers.values()) {
+    if (visible.has(flight.group)) marker.addTo(map); else marker.remove();
+  }
+}
+
+function updateStats() {
+  const all = [...markers.values()].map(m => m.flight);
+  const shown = all.filter(f => visible.has(f.group));
+  document.getElementById("n-air").textContent = shown.filter(f => !f.on_ground).length;
+  document.getElementById("n-ground").textContent = shown.filter(f => f.on_ground).length;
+  document.getElementById("legend").innerHTML = GROUPS.map(g => {
+    const n = all.filter(f => f.group === g.key).length;
+    return `<label><input type="checkbox" data-g="${g.key}" ${visible.has(g.key) ? "checked" : ""}>
+      <span class="sw" style="background:${g.color}"></span>${g.key}<span class="n">${n}</span></label>`;
+  }).join("");
+  document.querySelectorAll("#legend input").forEach(cb => cb.addEventListener("change", e => {
+    e.target.checked ? visible.add(e.target.dataset.g) : visible.delete(e.target.dataset.g);
+    applyFilter(); updateStats();
+  }));
+  tickUpdated();
+}
+
+function tickUpdated() {
+  if (!fetchedAt) return;
+  const min = Math.round((Date.now() - fetchedAt) / 60000);
+  const time = fetchedAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
+  document.getElementById("updated").textContent =
+    `Positions from ${time} UTC (${min <= 0 ? "just now" : min + " min ago"}), planes move forward along their course in between.`;
+}
+
+async function load() {
+  try {
+    const res = await fetch(`data/live.json?t=${Date.now()}`);
+    render(await res.json());
+  } catch (e) {
+    document.getElementById("updated").textContent = "Could not load live data. Retrying in a minute.";
+  }
+}
+
+// Animate: move every airborne plane along its course once per second
+setInterval(() => {
+  for (const { marker, flight } of markers.values()) marker.setLatLng(currentPosition(flight));
+  tickUpdated();
+}, 1000);
+
+load();
+setInterval(load, REFRESH_MS);
+</script>
 </body>
 </html>

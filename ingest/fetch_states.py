@@ -1,4 +1,4 @@
-"""Fetch one live snapshot of all aircraft over Europe from the OpenSky Network API.
+"""Fetch one live snapshot of all aircraft worldwide from the OpenSky Network API.
 
 Each run saves the raw API response, untouched, as one gzipped JSON file:
     data/raw/states/date=YYYY-MM-DD/HHMMSS.json.gz
@@ -24,8 +24,8 @@ import requests
 API = "https://opensky-network.org/api/states/all"
 TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 
-# Bounding box: Western and Central Europe (Portugal to Poland, Italy to Scotland)
-BBOX = {"lamin": 35.0, "lomin": -12.0, "lamax": 62.0, "lomax": 30.0}
+# No bounding box = the whole world (costs 4 API credits per call)
+BBOX: dict[str, float] = {}
 
 # Where snapshots are saved (the scheduled GitHub job overrides this with RAW_DIR)
 RAW_DIR = Path(os.getenv("RAW_DIR", Path(__file__).resolve().parent.parent / "data" / "raw" / "states"))
@@ -46,7 +46,7 @@ def get_token() -> str | None:
 
 
 def fetch() -> dict:
-    headers = {"User-Agent": "europe-night-cargo (portfolio project)"}
+    headers = {"User-Agent": "cargo-flight-tracker (portfolio project)"}
     token = get_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"

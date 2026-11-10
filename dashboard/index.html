@@ -43,6 +43,9 @@
   .leaflet-popup-content b { font-size: 0.95rem; }
   .leaflet-popup-content .muted { color: var(--muted); }
   .leaflet-container a.leaflet-popup-close-button { color: var(--muted); }
+  .leaflet-popup-content .route { margin: 4px 0; }
+  .leaflet-tooltip.apt { background: #1a1a19; color: var(--text); border: 1px solid var(--border); box-shadow: none; font-size: 0.75rem; font-weight: 600; padding: 2px 6px; }
+  .leaflet-tooltip.apt::before { display: none; }
   footer { position: absolute; z-index: 1000; right: 14px; bottom: 24px; font-size: 0.75rem; padding: 8px 10px; color: var(--muted); }
   footer a { color: var(--text-2); }
   @media (max-width: 600px) { #info { right: 14px; max-width: none; } footer { display: none; } }
@@ -65,6 +68,7 @@
 
 <footer class="panel">
   Data: <a href="https://opensky-network.org" target="_blank" rel="noopener">The OpenSky Network</a> ·
+  Routes: <a href="https://www.adsbdb.com" target="_blank" rel="noopener">adsbdb</a> ·
   <a href="https://github.com/mintyfizz/cargo-flight-tracker" target="_blank" rel="noopener">Code</a> · by Nathan Thomas Gatse
 </footer>
 
@@ -93,8 +97,110 @@ const planeSvg = color => `
   <svg viewBox="0 0 24 24"><path fill="${color}" stroke="#0e0e0e" stroke-width=".6"
     d="M12 1.5c.8 0 1.4.9 1.4 2.2v5.6l8.1 4.6v2.2l-8.1-2.4v4.7l2.4 1.8v1.8L12 21l-3.8 1v-1.8l2.4-1.8v-4.7l-8.1 2.4v-2.2l8.1-4.6V3.7c0-1.3.6-2.2 1.4-2.2z"/></svg>`;
 
-const markers = new Map();   // icao24 -> { marker, flight }
+const markers = new Map();   // icao24 -> { marker, flight, route, routeFor }
 let fetchedAt = null;
+
+// ---- Routes: departure and arrival airport, looked up when a plane is clicked ----
+const routeCache = new Map();               // callsign -> Promise<route | null>
+const routeLayer = L.layerGroup().addTo(map);
+let selected = null;                        // icao24 of the plane whose popup is open
+const hexOf = g => getComputedStyle(document.documentElement)
+  .getPropertyValue(colorOf(g).slice(4, -1)).trim();
+
+function getRoute(callsign) {
+  if (!routeCache.has(callsign)) {
+    const p = fetch(`https://api.adsbdb.com/v0/callsign/${encodeURIComponent(callsign)}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => {
+        const fr = j && j.response && j.response.flightroute;
+        if (!fr || !fr.origin || !fr.destination) return null;
+        const apt = a => ({ code: a.iata_code || a.icao_code, city: a.municipality || a.name,
+                            name: a.name, lat: a.latitude, lon: a.longitude });
+        return { origin: apt(fr.origin), destination: apt(fr.destination) };
+      })
+      .catch(() => { routeCache.delete(callsign); return null; });
+    routeCache.set(callsign, p);
+  }
+  return routeCache.get(callsign);
+}
+
+const rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
+function distKm(a, b) {
+  const dφ = rad(b[0] - a[0]), dλ = rad(b[1] - a[1]);
+  const h = Math.sin(dφ / 2) ** 2 + Math.cos(rad(a[0])) * Math.cos(rad(b[0])) * Math.sin(dλ / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// Great-circle path between two points; longitudes stay continuous so the line
+// does not jump across the map at the date line.
+function gcPath(from, to, steps = 64) {
+  const φ1 = rad(from[0]), λ1 = rad(from[1]), φ2 = rad(to[0]), λ2 = rad(to[1]);
+  const d = distKm(from, to) / 6371;
+  if (d < 1e-6) return [from, from];
+  const pts = [];
+  let prevLon = from[1];
+  for (let i = 0; i <= steps; i++) {
+    const f = i / steps, A = Math.sin((1 - f) * d) / Math.sin(d), B = Math.sin(f * d) / Math.sin(d);
+    const x = A * Math.cos(φ1) * Math.cos(λ1) + B * Math.cos(φ2) * Math.cos(λ2);
+    const y = A * Math.cos(φ1) * Math.sin(λ1) + B * Math.cos(φ2) * Math.sin(λ2);
+    const z = A * Math.sin(φ1) + B * Math.sin(φ2);
+    let lon = deg(Math.atan2(y, x));
+    while (lon - prevLon > 180) lon -= 360;
+    while (lon - prevLon < -180) lon += 360;
+    prevLon = lon;
+    pts.push([deg(Math.atan2(z, Math.sqrt(x * x + y * y))), lon]);
+  }
+  return pts;
+}
+
+// A known route only counts if the plane is actually somewhere between the two airports.
+function routeFits(route, pos) {
+  const o = [route.origin.lat, route.origin.lon], d = [route.destination.lat, route.destination.lon];
+  return distKm(o, pos) + distKm(pos, d) <= 1.3 * distKm(o, d) + 400;
+}
+
+function drawRoute(entry) {
+  routeLayer.clearLayers();
+  const r = entry.route;
+  if (!r) return;
+  const ll = entry.marker.getLatLng(), pos = [ll.lat, ll.lng];
+  if (!routeFits(r, pos)) return;
+  const color = hexOf(entry.flight.group);
+  const flown = gcPath(pos, [r.origin.lat, r.origin.lon]);
+  const ahead = gcPath(pos, [r.destination.lat, r.destination.lon]);
+  L.polyline(flown, { color, weight: 2, opacity: 0.9, interactive: false }).addTo(routeLayer);
+  L.polyline(ahead, { color, weight: 2, opacity: 0.9, dashArray: "6 7", interactive: false }).addTo(routeLayer);
+  for (const [pt, a, dir] of [[flown.at(-1), r.origin, "left"], [ahead.at(-1), r.destination, "right"]]) {
+    L.circleMarker(pt, { radius: 4, color, weight: 2, fillColor: "#0e0e0e", fillOpacity: 1, interactive: false })
+      .bindTooltip(a.code, { permanent: true, direction: dir, offset: [dir === "left" ? -6 : 6, 0], className: "apt" })
+      .addTo(routeLayer);
+  }
+}
+
+async function selectPlane(id) {
+  selected = id;
+  const entry = markers.get(id);
+  if (!entry) return;
+  const cs = entry.flight.callsign;
+  if (entry.routeFor !== cs) { entry.route = undefined; entry.routeFor = cs; }
+  entry.marker.setPopupContent(popupHtml(entry));
+  const route = await getRoute(cs);
+  if (entry.flight.callsign !== cs) return;
+  entry.route = route;
+  entry.marker.setPopupContent(popupHtml(entry));
+  if (selected === id) drawRoute(entry);
+}
+
+function routeHtml(entry) {
+  const r = entry.route;
+  if (r === undefined) return `<div class="route muted">Looking up route…</div>`;
+  if (r === null) return `<div class="route muted">Route not known for this flight</div>`;
+  const line = `<b>${r.origin.code}</b> ${r.origin.city} → <b>${r.destination.code}</b> ${r.destination.city}`;
+  const ll = entry.marker.getLatLng();
+  return routeFits(r, [ll.lat, ll.lng])
+    ? `<div class="route">${line}</div>`
+    : `<div class="route muted">Usual route: ${line}<br>The plane is not on that route right now.</div>`;
+}
 
 // Move a point forward along a heading (great-circle approximation)
 function project(lat, lon, headingDeg, meters) {
@@ -111,10 +217,12 @@ function currentPosition(f) {
   return project(f.lat, f.lon, f.heading, (f.speed_kmh / 3.6) * Math.max(elapsed, 0));
 }
 
-function popupHtml(f) {
+function popupHtml(entry) {
+  const f = entry.flight;
   const alt = f.altitude_m != null ? `${Math.round(f.altitude_m * 3.281).toLocaleString("en-GB")} ft` : "–";
   const seen = Math.round((Date.now() / 1000 - f.last_contact) / 60);
   return `<b>${f.callsign}</b><br>${f.operator}<br>
+    ${routeHtml(entry)}
     ${f.on_ground ? "On the ground" : `${alt} · ${f.speed_kmh ?? "–"} km/h · heading ${f.heading ?? "–"}°`}<br>
     <span class="muted">Last signal ${seen <= 0 ? "just now" : seen + " min ago"}</span>`;
 }
@@ -135,12 +243,18 @@ function render(data) {
     seen.add(f.icao24);
     const existing = markers.get(f.icao24);
     if (existing) {
+      const changed = existing.flight.callsign !== f.callsign;
       existing.flight = f;
       existing.marker.setIcon(iconFor(f));
-      existing.marker.setPopupContent(popupHtml(f));
+      if (changed && selected === f.icao24) selectPlane(f.icao24);
+      else existing.marker.setPopupContent(popupHtml(existing));
     } else {
-      const marker = L.marker(currentPosition(f), { icon: iconFor(f) }).bindPopup(popupHtml(f));
-      markers.set(f.icao24, { marker, flight: f });
+      const marker = L.marker(currentPosition(f), { icon: iconFor(f) });
+      const entry = { marker, flight: f, route: undefined, routeFor: f.callsign };
+      marker.bindPopup(popupHtml(entry));
+      marker.on("popupopen", () => selectPlane(f.icao24));
+      marker.on("popupclose", () => { if (selected === f.icao24) { selected = null; routeLayer.clearLayers(); } });
+      markers.set(f.icao24, entry);
     }
   }
   for (const [id, m] of markers) if (!seen.has(id)) { m.marker.remove(); markers.delete(id); }
@@ -191,6 +305,8 @@ async function load() {
 // Animate: move every airborne plane along its course once per second
 setInterval(() => {
   for (const { marker, flight } of markers.values()) marker.setLatLng(currentPosition(flight));
+  const sel = selected && markers.get(selected);
+  if (sel && sel.route) drawRoute(sel);
   tickUpdated();
 }, 1000);
 

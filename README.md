@@ -32,6 +32,7 @@ cd dashboard && python -m http.server 8000   # open http://localhost:8000
 
 ## Notes
 
+- **Routes:** click a plane to see where it departed from and where it is going, with a line drawn on the map (solid for the part already flown, dashed for the part ahead). OpenSky does not publish the route of a flight that is still in the air, so the page looks it up by callsign in the free [adsbdb](https://www.adsbdb.com) route database. That is the usual route for the callsign, not a confirmed flight plan: if the plane is nowhere near it, the page says so and draws no line.
 - Anonymous OpenSky access allows about 400 credits a day and a worldwide call costs 4, which is why the job runs every 15 minutes. With a free OpenSky account, add `OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET` as repository secrets for a higher limit.
 - Cargo flights are identified by airline code only. Cargo carried in the hold of passenger flights is not included.
 - Data: The OpenSky Network, https://opensky-network.org. Basemap: Esri.

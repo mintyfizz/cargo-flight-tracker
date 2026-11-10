@@ -1,0 +1,4 @@
+-- Step 1: flatten the raw API snapshots
+-- Input:  data/raw/states/date=*/*.json.gz (one file per snapshot, "states" is a list of arrays)
+-- Output: stg_states, one row per aircraft per snapshot
+-- TODO: read_json over all files, unnest "states", name the 17 fields (see OpenSky API docs)

@@ -1,0 +1,2 @@
+-- Step 3: KPI tables for the dashboard (kpi_*)
+-- TODO: cargo share of aircraft by hour, flights per operator, busiest hubs by hour

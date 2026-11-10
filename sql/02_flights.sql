@@ -1,0 +1,3 @@
+-- Step 2: cargo flights and hub activity
+-- TODO: tag cargo operators by call-sign prefix, find aircraft on the ground near a hub,
+--       group consecutive snapshots of the same aircraft into flights

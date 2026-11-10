@@ -1,0 +1,52 @@
+name: Collect live snapshot
+
+# Every 15 minutes, fetch one snapshot from the OpenSky API and store it on the `data` branch.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Check out the data branch next to the code
+        run: |
+          if git ls-remote --exit-code --heads origin data >/dev/null; then
+            git fetch origin data
+            git worktree add databranch origin/data
+            git -C databranch checkout -B data
+          else
+            git worktree add --orphan -b data databranch
+          fi
+
+      - name: Fetch snapshot
+        env:
+          RAW_DIR: databranch/states
+          OPENSKY_CLIENT_ID: ${{ secrets.OPENSKY_CLIENT_ID }}
+          OPENSKY_CLIENT_SECRET: ${{ secrets.OPENSKY_CLIENT_SECRET }}
+        run: python ingest/fetch_states.py
+
+      - name: Commit and push
+        run: |
+          cd databranch
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push origin data

@@ -68,7 +68,7 @@
 
 <footer class="panel">
   Data: <a href="https://opensky-network.org" target="_blank" rel="noopener">The OpenSky Network</a> ·
-  Routes: <a href="https://www.adsbdb.com" target="_blank" rel="noopener">adsbdb</a> ·
+  Tracks: <a href="https://adsb.lol" target="_blank" rel="noopener">adsb.lol</a> ·
   <a href="https://github.com/mintyfizz/cargo-flight-tracker" target="_blank" rel="noopener">Code</a> · by Nathan Thomas Gatse
 </footer>
 
@@ -97,32 +97,17 @@ const planeSvg = color => `
   <svg viewBox="0 0 24 24"><path fill="${color}" stroke="#0e0e0e" stroke-width=".6"
     d="M12 1.5c.8 0 1.4.9 1.4 2.2v5.6l8.1 4.6v2.2l-8.1-2.4v4.7l2.4 1.8v1.8L12 21l-3.8 1v-1.8l2.4-1.8v-4.7l-8.1 2.4v-2.2l8.1-4.6V3.7c0-1.3.6-2.2 1.4-2.2z"/></svg>`;
 
-const markers = new Map();   // icao24 -> { marker, flight, route, routeFor }
+const markers = new Map();   // icao24 -> { marker, flight }
 let fetchedAt = null;
 
-// ---- Routes: departure and arrival airport, looked up when a plane is clicked ----
-const routeCache = new Map();               // callsign -> Promise<route | null>
+// ---- Routes: where the plane took off and where it is going (worked out in ingest/routes.py) ----
+//   dep  = airport the aircraft really took off from, measured from its recorded track
+//   path = the track it has flown since take-off
+//   arr  = scheduled destination, only present when it is consistent with that real departure
 const routeLayer = L.layerGroup().addTo(map);
 let selected = null;                        // icao24 of the plane whose popup is open
 const hexOf = g => getComputedStyle(document.documentElement)
   .getPropertyValue(colorOf(g).slice(4, -1)).trim();
-
-function getRoute(callsign) {
-  if (!routeCache.has(callsign)) {
-    const p = fetch(`https://api.adsbdb.com/v0/callsign/${encodeURIComponent(callsign)}`)
-      .then(r => (r.ok ? r.json() : null))
-      .then(j => {
-        const fr = j && j.response && j.response.flightroute;
-        if (!fr || !fr.origin || !fr.destination) return null;
-        const apt = a => ({ code: a.iata_code || a.icao_code, city: a.municipality || a.name,
-                            name: a.name, lat: a.latitude, lon: a.longitude });
-        return { origin: apt(fr.origin), destination: apt(fr.destination) };
-      })
-      .catch(() => { routeCache.delete(callsign); return null; });
-    routeCache.set(callsign, p);
-  }
-  return routeCache.get(callsign);
-}
 
 const rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
 function distKm(a, b) {
@@ -153,53 +138,49 @@ function gcPath(from, to, steps = 64) {
   return pts;
 }
 
-// A known route only counts if the plane is actually somewhere between the two airports.
-function routeFits(route, pos) {
-  const o = [route.origin.lat, route.origin.lon], d = [route.destination.lat, route.destination.lon];
-  return distKm(o, pos) + distKm(pos, d) <= 1.3 * distKm(o, d) + 400;
-}
-
 function drawRoute(entry) {
   routeLayer.clearLayers();
-  const r = entry.route;
-  if (!r) return;
+  const f = entry.flight;
+  if (f.on_ground || !f.dep) return;
   const ll = entry.marker.getLatLng(), pos = [ll.lat, ll.lng];
-  if (!routeFits(r, pos)) return;
-  const color = hexOf(entry.flight.group);
-  const flown = gcPath(pos, [r.origin.lat, r.origin.lon]);
-  const ahead = gcPath(pos, [r.destination.lat, r.destination.lon]);
-  L.polyline(flown, { color, weight: 2, opacity: 0.9, interactive: false }).addTo(routeLayer);
-  L.polyline(ahead, { color, weight: 2, opacity: 0.9, dashArray: "6 7", interactive: false }).addTo(routeLayer);
-  for (const [pt, a, dir] of [[flown.at(-1), r.origin, "left"], [ahead.at(-1), r.destination, "right"]]) {
+  const color = hexOf(f.group);
+  const dot = (pt, code, dir) =>
     L.circleMarker(pt, { radius: 4, color, weight: 2, fillColor: "#0e0e0e", fillOpacity: 1, interactive: false })
-      .bindTooltip(a.code, { permanent: true, direction: dir, offset: [dir === "left" ? -6 : 6, 0], className: "apt" })
+      .bindTooltip(code, { permanent: true, direction: dir, offset: [dir === "left" ? -6 : 6, 0], className: "apt" })
       .addTo(routeLayer);
+
+  // Flown part: from the plane back along its recorded track to the departure airport
+  const stops = [[f.dep.lat, f.dep.lon], ...(f.path || [])];
+  const flown = [pos];
+  for (let i = stops.length - 1; i >= 0; i--) flown.push(...gcPath(flown.at(-1), stops[i], 6).slice(1));
+  L.polyline(flown, { color, weight: 2, opacity: 0.9, interactive: false }).addTo(routeLayer);
+  const depPt = flown.at(-1);
+
+  let arrPt = null;
+  if (f.arr) {
+    const ahead = gcPath(pos, [f.arr.lat, f.arr.lon]);
+    L.polyline(ahead, { color, weight: 2, opacity: 0.9, dashArray: "6 7", interactive: false }).addTo(routeLayer);
+    arrPt = ahead.at(-1);
   }
+  const depLeft = !arrPt || depPt[1] <= arrPt[1];
+  dot(depPt, f.dep.code, depLeft ? "left" : "right");
+  if (arrPt) dot(arrPt, f.arr.code, depLeft ? "right" : "left");
 }
 
-async function selectPlane(id) {
+function selectPlane(id) {
   selected = id;
   const entry = markers.get(id);
-  if (!entry) return;
-  const cs = entry.flight.callsign;
-  if (entry.routeFor !== cs) { entry.route = undefined; entry.routeFor = cs; }
-  entry.marker.setPopupContent(popupHtml(entry));
-  const route = await getRoute(cs);
-  if (entry.flight.callsign !== cs) return;
-  entry.route = route;
-  entry.marker.setPopupContent(popupHtml(entry));
-  if (selected === id) drawRoute(entry);
+  if (entry) drawRoute(entry);
 }
 
-function routeHtml(entry) {
-  const r = entry.route;
-  if (r === undefined) return `<div class="route muted">Looking up route…</div>`;
-  if (r === null) return `<div class="route muted">Route not known for this flight</div>`;
-  const line = `<b>${r.origin.code}</b> ${r.origin.city} → <b>${r.destination.code}</b> ${r.destination.city}`;
-  const ll = entry.marker.getLatLng();
-  return routeFits(r, [ll.lat, ll.lng])
-    ? `<div class="route">${line}</div>`
-    : `<div class="route muted">Usual route: ${line}<br>The plane is not on that route right now.</div>`;
+function routeHtml(f) {
+  if (f.on_ground) return "";
+  if (!f.dep) return `<div class="route muted">Departure airport not identified yet</div>`;
+  const off = new Date(f.dep.time * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
+  const from = `<b>${f.dep.code}</b> ${f.dep.city}`;
+  return f.arr
+    ? `<div class="route">${from} → <b>${f.arr.code}</b> ${f.arr.city}<br><span class="muted">Took off ${off} UTC</span></div>`
+    : `<div class="route">From ${from}<br><span class="muted">Took off ${off} UTC · destination not confirmed</span></div>`;
 }
 
 // Move a point forward along a heading (great-circle approximation)
@@ -222,7 +203,7 @@ function popupHtml(entry) {
   const alt = f.altitude_m != null ? `${Math.round(f.altitude_m * 3.281).toLocaleString("en-GB")} ft` : "–";
   const seen = Math.round((Date.now() / 1000 - f.last_contact) / 60);
   return `<b>${f.callsign}</b><br>${f.operator}<br>
-    ${routeHtml(entry)}
+    ${routeHtml(f)}
     ${f.on_ground ? "On the ground" : `${alt} · ${f.speed_kmh ?? "–"} km/h · heading ${f.heading ?? "–"}°`}<br>
     <span class="muted">Last signal ${seen <= 0 ? "just now" : seen + " min ago"}</span>`;
 }
@@ -243,14 +224,12 @@ function render(data) {
     seen.add(f.icao24);
     const existing = markers.get(f.icao24);
     if (existing) {
-      const changed = existing.flight.callsign !== f.callsign;
       existing.flight = f;
       existing.marker.setIcon(iconFor(f));
-      if (changed && selected === f.icao24) selectPlane(f.icao24);
-      else existing.marker.setPopupContent(popupHtml(existing));
+      existing.marker.setPopupContent(popupHtml(existing));
     } else {
       const marker = L.marker(currentPosition(f), { icon: iconFor(f) });
-      const entry = { marker, flight: f, route: undefined, routeFor: f.callsign };
+      const entry = { marker, flight: f };
       marker.bindPopup(popupHtml(entry));
       marker.on("popupopen", () => selectPlane(f.icao24));
       marker.on("popupclose", () => { if (selected === f.icao24) { selected = null; routeLayer.clearLayers(); } });
@@ -306,7 +285,7 @@ async function load() {
 setInterval(() => {
   for (const { marker, flight } of markers.values()) marker.setLatLng(currentPosition(flight));
   const sel = selected && markers.get(selected);
-  if (sel && sel.route) drawRoute(sel);
+  if (sel) drawRoute(sel);
   tickUpdated();
 }, 1000);
 

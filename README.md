@@ -32,7 +32,10 @@ cd dashboard && python -m http.server 8000   # open http://localhost:8000
 
 ## Notes
 
-- **Routes:** click a plane to see where it departed from and where it is going, with a line drawn on the map (solid for the part already flown, dashed for the part ahead). OpenSky does not publish the route of a flight that is still in the air, so the page looks it up by callsign in the free [adsbdb](https://www.adsbdb.com) route database. That is the usual route for the callsign, not a confirmed flight plan: if the plane is nowhere near it, the page says so and draws no line.
+- **Routes:** click a plane to see where it took off and where it is going, with its flown track drawn as a solid line and the remaining leg as a dashed line. `ingest/routes.py` works this out for every airborne flight:
+  - **Departure is measured, not looked up.** The aircraft's own recorded track (open ADS-B data from [adsb.lol](https://adsb.lol)) is followed back to the point where it left the ground, and that point is matched to the nearest airport in `reference/airports.csv` ([OurAirports](https://ourairports.com/data/)). If the track does not reach back to the take-off, the departure is left empty rather than guessed.
+  - **Destination is cross-checked.** Aircraft do not broadcast a destination and live flight plans are not open data, so the destination comes from the scheduled route for the callsign in two independent databases ([adsbdb](https://www.adsbdb.com), [hexdb.io](https://hexdb.io)). It is only shown when that scheduled leg starts at the airport the aircraft really took off from and the aircraft is on the way there. Otherwise the map says "destination not confirmed". A diversion after take-off cannot be detected this way.
+  - Results are cached per flight on the `data` branch, so each flight costs one track download.
 - Anonymous OpenSky access allows about 400 credits a day and a worldwide call costs 4, which is why the job runs every 15 minutes. With a free OpenSky account, add `OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET` as repository secrets for a higher limit.
 - Cargo flights are identified by airline code only. Cargo carried in the hold of passenger flights is not included.
-- Data: The OpenSky Network, https://opensky-network.org. Basemap: Esri.
+- Data: positions from The OpenSky Network, https://opensky-network.org. Tracks from adsb.lol. Scheduled routes from adsbdb and hexdb.io. Airports from OurAirports. Basemap: Esri.

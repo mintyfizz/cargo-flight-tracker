@@ -55,7 +55,7 @@ def main() -> None:
             }
         )
 
-    add_routes(flights, ROUTE_CACHE)
+    add_routes(flights, ROUTE_CACHE, snapshot["fetched_at"])
 
     OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     OUT_FILE.write_text(

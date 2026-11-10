@@ -4,6 +4,10 @@ A live world map of express and cargo airline flights (DHL, UPS, FedEx, ASL and 
 
 **Live map:** https://mintyfizz.github.io/cargo-flight-tracker/
 
+![World map with every cargo flight in the air, coloured by airline](docs/overview.png)
+
+![A clicked flight: flown track from San Francisco as a solid line, remaining leg to Cincinnati as a dashed line](docs/route.png)
+
 Everything runs on free, open data and free hosting: a scheduled GitHub Actions job is the pipeline, a Git branch is the storage, and GitHub Pages serves the map. There is no server to maintain.
 
 ## What you see on the map
@@ -47,9 +51,24 @@ Position data says where a plane is, not where it came from or where it is going
 
 Otherwise the map says "destination not confirmed" and draws only the flown track.
 
-On a typical run about 9 in 10 airborne flights get a measured departure and about 6 in 10 a confirmed destination.
+Measured over the first 4 pipeline runs on 10 November 2026 (981 airborne flights checked): 90% got a measured departure and 59% a confirmed destination. Every run now adds a line to `routes/coverage.csv` on the `data` branch, and the `kpi_route_coverage` table (see below) recomputes these shares over the whole history.
 
 Results are cached per flight on the `data` branch (`routes/cache.json`), so each flight costs one track download.
+
+## Analyse the history
+
+The stored snapshots can be analysed with DuckDB. `run_pipeline.py` runs the three SQL steps in `sql/` and exports the KPI tables as JSON to `data/kpis/`:
+
+| Step | Builds |
+| --- | --- |
+| `01_staging.sql` | `stg_states`: one row per aircraft per snapshot, flattened from the raw API files |
+| `02_flights.sql` | `cargo_states` (cargo aircraft only), `cargo_flights` (consecutive airborne snapshots grouped into flights), `hub_visits` (cargo aircraft at or near a hub from `reference/hubs.csv`) |
+| `03_kpis.sql` | `kpi_cargo_share_by_hour`, `kpi_flights_per_operator`, `kpi_busiest_hubs_by_hour`, `kpi_route_coverage` |
+
+```bash
+git fetch origin data && git worktree add databranch origin/data   # the full history
+RAW_DIR=databranch/states python run_pipeline.py
+```
 
 ## Project layout
 
@@ -62,7 +81,9 @@ Results are cached per flight on the `data` branch (`routes/cache.json`), so eac
 | `dashboard/index.html` | The map |
 | `reference/cargo_operators.csv` | Cargo airline codes and the group each belongs to |
 | `reference/airports.csv` | About 9,500 airports with coordinates |
-| `sql/`, `run_pipeline.py` | DuckDB steps for analysing the stored snapshots (work in progress, not used by the map) |
+| `sql/`, `run_pipeline.py` | DuckDB analysis of the stored snapshots (not used by the map) |
+| `reference/hubs.csv` | Cargo hub airports used in the hub analysis |
+| `docs/` | Screenshots for this README |
 
 ## Run it locally
 

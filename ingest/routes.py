@@ -193,7 +193,7 @@ def needs_trace(entry: dict | None, f: dict, now: float) -> bool:
     return False
 
 
-def add_routes(flights: list[dict], cache_file: Path) -> None:
+def add_routes(flights: list[dict], cache_file: Path, fetched_at: str) -> None:
     """Add `dep`, `arr`, `path` (and `sched` when unconfirmed) to each airborne flight, in place."""
     airports = Airports()
     cache = json.loads(cache_file.read_text()) if cache_file.exists() else {}
@@ -252,5 +252,12 @@ def add_routes(flights: list[dict], cache_file: Path) -> None:
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     cache_file.write_text(json.dumps(cache))
     air = [f for f in flights if not f["on_ground"]]
+
+    # One line per run, so the share of flights with a known route can be measured over time
+    coverage = cache_file.parent / "coverage.csv"
+    if not coverage.exists():
+        coverage.write_text("fetched_at,airborne,departure_measured,destination_confirmed\n")
+    with coverage.open("a") as fh:
+        fh.write(f"{fetched_at},{len(air)},{sum('dep' in f for f in air)},{sum('arr' in f for f in air)}\n")
     print(f"routes: {traces} tracks and {lookups} schedules downloaded; of {len(air)} airborne flights "
           f"{sum('dep' in f for f in air)} have a measured departure, {sum('arr' in f for f in air)} a confirmed destination")

@@ -7,3 +7,6 @@ data/*.duckdb.wal
 .env
 data/raw/
 dashboard/data/live.json
+databranch/
+data/kpis/
+dashboard/_shot.html

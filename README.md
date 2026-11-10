@@ -62,7 +62,7 @@ Results are cached per flight on the `data` branch (`routes/cache.json`), so eac
 | `dashboard/index.html` | The map |
 | `reference/cargo_operators.csv` | Cargo airline codes and the group each belongs to |
 | `reference/airports.csv` | About 9,500 airports with coordinates |
-| `sql/`, `run_pipeline.py` | DuckDB steps for analysing the stored snapshots |
+| `sql/`, `run_pipeline.py` | DuckDB steps for analysing the stored snapshots (work in progress, not used by the map) |
 
 ## Run it locally
 

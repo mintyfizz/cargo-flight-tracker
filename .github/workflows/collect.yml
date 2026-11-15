@@ -71,12 +71,16 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dashboard
+          # A re-run must not collide with an earlier attempt's artifact.
+          name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
       # Artifact metadata can briefly lag behind a successful upload.
       # Retry publishing without collecting another OpenSky snapshot.
       - name: Deploy live map
         id: deployment
         continue-on-error: true
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Wait before retrying deployment
         if: steps.deployment.outcome == 'failure'
@@ -86,3 +90,5 @@ jobs:
         id: deployment_retry
         if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
